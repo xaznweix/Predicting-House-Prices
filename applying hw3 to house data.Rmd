@@ -1,0 +1,307 @@
+---
+title: "Applying HW3 to house data"
+author: "Jacob Bayer"
+date: "4/24/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(glmnet)
+library(dplyr)
+rm(list = ls())    #delete objects
+cat("\014")
+setwd("C:/Users/Jacob-Windows/OneDrive - The City University of New York/School/Spring 21/STA 9890/house-prices-advanced-regression-techniques")
+house<-read.csv("train.csv", stringsAsFactors = TRUE)
+```
+
+
+```{r}
+house = house %>% 
+  purrr::discard(~sum(is.na(.x))/length(.x)* 100 >= 0.001)
+
+house$HouseAge<-as.integer(format(Sys.Date(), "%Y"))-house$YearBuilt
+house$RemodelAge<-as.integer(format(Sys.Date(), "%Y"))-house$YearRemodAdd
+house$YrSinceSold<-as.integer(format(Sys.Date(), "%Y"))-house$YrSold
+
+house$SalePriceLog <- log(house$SalePrice/1000)
+
+SalePrice <- house$SalePrice
+
+dropcols<-c('YrSold','YearBuilt','YearRemodAdd','SalePrice')
+house <- house %>% select(-one_of(dropcols))
+
+```
+
+Here p is the number of variables remaining in the house data after some columns were removed. n is the number of observations in the house data. X is a matrisx
+```{r}
+set.seed(0)
+X = model.matrix(SalePriceLog∼., house)
+y = as.numeric(as.matrix(house['SalePriceLog']))
+p = dim(X)[2]
+n = dim(X)[1]
+K = 10
+d = ceiling(n/K)
+set.seed(0)
+i.mix = sample(1:n)
+```
+
+What should lam.net be?
+
+```{r}
+# Tuning parameter values for lasso, and ridge regression
+lam.las = c(seq(1e-3,0.1,length=100),seq(0.12,2.5,length=100)) 
+lam.rid = lam.las*1000
+lam.net = lam.las*500
+```
+
+
+```{r}
+nlam = length(lam.las)
+# These two matrices store the prediction errors for each
+# observation (along the rows), when we fit the model using
+# each value of the tuning parameter (along the columns)
+e.rid = matrix(0,n,nlam)
+e.las = matrix(0,n,nlam)
+e.net = matrix(0,n,nlam)
+```
+
+
+# Part A
+
+```{r}
+for (k in 1:K) {
+  # Here there are K = 10 folds. D is n/k.
+  cat("Fold",k,"\n")
+  
+  # i.mix is a shuffled index of X
+  # The folds range endpoints:
+  
+  folds_range_start = (1+(k-1)*d)     # for (k in 1:K) {print(1+(k-1)*d)}
+  folds_range_end = (k*d)             # for (k in 1:K) {print(k*d)}
+
+    
+  folds = folds_range_start:folds_range_end; # for (k in 1:K) {print((1+(k-1)*d):(k*d))}
+  
+  
+  # For the first fold, the first 130 observations become the test data. For the second fold, the second
+  # 130 observations become the test data, and so on.
+  i.tr=i.mix[-folds]
+  i.val=i.mix[folds]
+
+  
+  X.tr = X[i.tr,] # houseing predictors
+  y.tr = y[i.tr]   # houseing responses
+  X.val = X[i.val,] # validation predictors
+  y.val = y[i.val]  # validation responses
+  
+  
+  # TODO
+  # Now use the function glmnet on the houseing data to get the 
+  # ridge regression solutions at all tuning parameter values in
+  # lam.rid, and the lasso solutions at all tuning parameter 
+  # values in lam.las
+  a.rid = glmnet(alpha = 0,x =  X.tr, y = y.tr, lambda = lam.rid) # for the ridge regression solutions, use alpha=0
+  a.las = glmnet(alpha = 1, x =  X.tr, y = y.tr, lambda = lam.las) # for the lasso solutions, use alpha=1
+  a.net = glmnet(alpha = 0.5, x =  X.tr, y = y.tr, lambda = lam.net)
+  
+  # Here we're actually going to reverse the column order of the
+  # a.rid$beta and a.las$beta matrices, because we want their columns
+  # to correspond to increasing lambda values (glmnet's default makes
+  # it so that these are actually in decreasing lambda order), i.e.,
+  # in the same order as our lam.rid and lam.las vectors
+  rid.beta = as.matrix(a.rid$beta[,nlam:1])
+  las.beta = as.matrix(a.las$beta[,nlam:1])
+  net.beta = as.matrix(a.las$beta[,nlam:1])
+  
+  yhat.rid = X.val%*%rid.beta
+  yhat.las = X.val%*%las.beta
+  yhat.net = X.val%*%net.beta
+  
+  # The length of e.rid nlam*length(bstar)
+  e.rid[i.val,] = (yhat.rid-y.val)^2
+  e.las[i.val,] = (yhat.las-y.val)^2
+  e.net[i.val,] = (yhat.net-y.val)^2
+}
+```
+
+```{r}
+# TODO
+# Here you need to compute: 
+# -cv.rid, cv.las: vectors of length nlam, giving the cross-validation
+#  errors for ridge regression and the lasso, across all values of the
+#  tuning parameter
+cv.rid = colMeans(e.rid)
+cv.las = colMeans(e.las)
+cv.net = colMeans(e.net)
+```
+
+```{r}
+
+# -se.rid, se.las: vectors of length nlam, giving the standard errors
+#  of the cross-validation estimates for ridge regression and the lasso, 
+#  across all values of the tuning parameter
+
+pe.rid = matrix(0,K,nlam)
+pe.las = matrix(0,K,nlam)
+pe.net = matrix(0,K,nlam)
+
+# This calculates the error for each fold
+for (k in 1:K) {
+  cat("Fold",k,"\n")
+  folds=(1+(k-1)*d):(k*d);
+  i.val=i.mix[folds]
+  
+  # pe.rid and pe.las are both nlam long
+  pe.rid[k,] = colMeans(e.rid[i.val,])
+  pe.las[k,] = colMeans(e.las[i.val,])
+  pe.net[k,] = colMeans(e.net[i.val,])
+}
+
+
+se.rid = apply(pe.rid,2,sd)/sqrt(K)
+se.las = apply(pe.las,2,sd)/sqrt(K)
+se.net = apply(pe.net,2,sd)/sqrt(K)
+```
+
+```{r}
+
+# Usual rule for choosing lambda
+i1.rid = which.min(cv.rid)
+i1.las = which.min(cv.las)
+i1.net = which.min(cv.net)
+
+cv.rid.1se = cv.rid[i1.rid] + se.rid[i1.rid]
+cv.las.1se = cv.las[i1.las]+se.las[i1.las]
+cv.net.1se = cv.las[i1.net]+se.las[i1.net]
+
+i2.rid = which(cv.rid < cv.rid.1se)
+i2.rid = tail(i2.rid, n=1)
+
+
+i2.las = which(cv.las < cv.las.1se)
+i2.las = tail(i2.las, n=1)
+
+i2.net = which(cv.net < cv.net.1se)
+i2.net = tail(i2.net, n=1)
+
+```
+
+
+
+```{r}
+min.cv.rid=cv.rid[i1.rid]
+min.cv.las=cv.las[i1.las]
+min.cv.net=cv.las[i1.net]
+print('Ridge Error:')
+min.cv.rid
+print("Lasso Error:")
+min.cv.las
+print("Elastic Net Error:")
+min.cv.net
+```
+
+The lambda values that minimize cross validation mean square error are printed below:
+
+```{r}
+# Ridge
+lambda.rid = lam.rid[i1.rid]
+
+# Lasso
+lambda.las = lam.las[i1.las]
+
+# Elastic Net
+lambda.net = lam.net[i1.net]
+
+print('Ridge Lambda:')
+lambda.rid
+print("Lasso Lambda:")
+lambda.las
+print("Elastic Net Lambda:")
+lambda.net
+```
+
+
+
+```{r}
+a.rid = glmnet(X, y, lambda = lambda.rid, alpha=0)
+a.las = glmnet(X, y, lambda = lambda.las, alpha=1) 
+a.net = glmnet(X, y, lambda = lambda.net, alpha=0.5) 
+
+rid.beta = as.matrix(a.rid$beta[,1])
+las.beta = as.matrix(a.las$beta[,1]) 
+net.beta = as.matrix(a.las$beta[,1]) 
+
+yhat.rid = X%*%rid.beta
+yhat.las = X%*%las.beta
+yhat.net = X%*%las.beta
+
+```
+
+
+
+# SSE
+
+```{r}
+# Ridge SSE
+sum((y-yhat.rid)^2)
+
+# Lasso SSE
+sum((y-yhat.las)^2)
+
+# Lasso SSE
+sum((y-yhat.net)^2)
+```
+# MSE
+
+This seems good. These are low. 
+
+```{r}
+# Ridge SSE
+mean((y-yhat.rid)^2)
+
+# Lasso SSE
+mean((y-yhat.las)^2)
+
+# Lasso SSE
+mean((y-yhat.net)^2)
+```
+
+I don't know if these are low
+
+```{r}
+# Ridge absolute error
+sum(abs((y-yhat.rid)))
+
+# Lasso absolute error
+sum(abs((y-yhat.las)))
+
+# Lasso absolute error
+sum(abs((y-yhat.net)))
+```
+You should be able to convert these logarithm predictions back into sale price but there is a lot of error introduced there.
+
+```{r}
+# Ridge absolute error
+sum(abs((SalePrice-exp(yhat.rid)*1000)))
+
+# Lasso absolute error
+sum(abs((SalePrice-exp(yhat.las)*1000)))
+
+# Lasso absolute error
+sum(abs((SalePrice-exp(yhat.net)*1000)))
+```
+
+```{r}
+# Ridge SSE
+mean((SalePrice-exp(yhat.rid)*1000)^2)
+
+# Lasso SSE
+mean((SalePrice-exp(yhat.las)*1000)^2)
+
+# Lasso SSE
+mean((SalePrice-exp(yhat.net)*1000)^2)
+```
